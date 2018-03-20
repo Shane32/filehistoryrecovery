@@ -74,73 +74,91 @@ namespace FileHistoryRecovery
 
         List<string> InputFolders;
         string OutputFolder;
+        private Dictionary<string, MyFileInfo> FileDictionary;
+        private Dictionary<string, bool> FolderDictionary;
+        private static BackgroundWorker bgWorkerStatic;
 
         private void bgWorker_DoWork(object sender, DoWorkEventArgs e)
         {
-            if (OutputFolder.EndsWith("\\")) OutputFolder = OutputFolder.Substring(0, OutputFolder.Length - 1);
-            FileDictionary = new Dictionary<string, MyFileInfo>();
-            FolderDictionary = new Dictionary<string, bool>();
-            foreach (var inFolder in InputFolders)
+            bool success = false;
+            try
             {
-                AddTree(inFolder);
-            }
-            long totalSize = 0;
-            foreach (var mfi in FileDictionary.Values)
-            {
-                totalSize += Math.Max(mfi.FileSize, 1024 * 1024);
-            }
-            long sizeCopied = 0;
-            int percentComplete = 0;
-            foreach (var mfi in FileDictionary.Values)
-            {
-                if (FolderDictionary[mfi.Folder])
+                bgWorkerStatic = bgWorker;
+                if (OutputFolder.EndsWith("\\")) OutputFolder = OutputFolder.Substring(0, OutputFolder.Length - 1);
+                FileDictionary = new Dictionary<string, MyFileInfo>();
+                FolderDictionary = new Dictionary<string, bool>();
+                foreach (var inFolder in InputFolders)
                 {
-                    FileInfo fi = null;
-                    DirectoryInfo di = null;
+                    AddTree(inFolder);
+                }
+                long totalSize = 0;
+                foreach (var mfi in FileDictionary.Values)
+                {
+                    totalSize += Math.Max(mfi.FileSize, 1024 * 256);
+                }
+                long sizeCopied = 0;
+                int percentComplete = 0;
+                foreach (var mfi in FileDictionary.Values.OrderBy(x => x.RelativePath))
+                {
+                    if (bgWorker.CancellationPending) return;
+                    if (FolderDictionary[mfi.Folder])
+                    {
+                        FileInfo fi = null;
+                        DirectoryInfo di = null;
+                        try
+                        {
+                            fi = new FileInfo(OutputFolder + mfi.RelativePath);
+                            di = fi.Directory;
+                            if (!di.Exists) di.Create();
+                        }
+                        catch (Exception ex)
+                        {
+                            MessageBox.Show("Cannot create folder " + di?.FullName + ": " + ex.Message, "File History Recovery", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        }
+                        FolderDictionary[mfi.Folder] = false;
+                    }
                     try
                     {
-                        fi = new FileInfo(OutputFolder + mfi.RelativePath);
-                        di = fi.Directory;
-                        if (!di.Exists) di.Create();
+                        mfi.CopyTo(OutputFolder);
                     }
                     catch (Exception ex)
                     {
-                        MessageBox.Show("Cannot create folder " + di?.FullName + ": " + ex.Message, "File History Recovery", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        MessageBox.Show("Cannot copy file " + mfi.FileInfo.FullName + " to " + OutputFolder + mfi.RelativePath + ": " + ex.Message, "File History Recovery", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     }
-                    FolderDictionary[mfi.Folder] = false;
+                    sizeCopied += Math.Max(mfi.FileSize, 1024 * 256);
+                    int pc2;
+                    pc2 = (int)(sizeCopied * 100 / totalSize);
+                    if (percentComplete != pc2)
+                        bgWorker.ReportProgress(percentComplete = pc2);
                 }
-                try
+                foreach (var fold in FolderDictionary.Where(x => x.Value).OrderBy(x => x.Key).Select(x => x.Key))
                 {
-                    mfi.CopyTo(OutputFolder);
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show("Cannot copy file " + mfi.FileInfo.FullName + " to " + OutputFolder + mfi.RelativePath + ": " + ex.Message, "File History Recovery", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
-                sizeCopied += Math.Max(mfi.FileSize, 1024 * 256);
-                int pc2;
-                pc2 = (int)(sizeCopied * 100 / totalSize);
-                if (percentComplete != pc2)
-                    bgWorker.ReportProgress(percentComplete = pc2);
-            }
-            foreach (var fold in FolderDictionary)
-            {
-                if (fold.Value)
-                {
+                    if (bgWorkerStatic.CancellationPending) return;
                     try
                     {
-                        Directory.CreateDirectory(OutputFolder + fold.Key);
+                        Directory.CreateDirectory(OutputFolder + fold);
                     }
                     catch (Exception ex)
                     {
-                        MessageBox.Show("Cannot create folder " + OutputFolder + fold.Key + ": " + ex.Message, "File History Recovery", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        MessageBox.Show("Cannot create folder " + OutputFolder + fold + ": " + ex.Message, "File History Recovery", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     }
                 }
+                success = true;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.ToString(), "File History Recovery", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                FileDictionary = null;
+                FolderDictionary = null;
+                InputFolders = null;
+                OutputFolder = null;
+                e.Cancel = !success;
             }
         }
 
-        private Dictionary<string, MyFileInfo> FileDictionary;
-        private Dictionary<string, bool> FolderDictionary;
         private void AddTree(string rootFolder)
         {
             if (rootFolder.EndsWith("\\")) rootFolder = rootFolder.Substring(0, rootFolder.Length - 1);
@@ -148,6 +166,7 @@ namespace FileHistoryRecovery
         }
         private void ProcessFolder(string rootFolder, string folder)
         {
+            if (bgWorkerStatic.CancellationPending) return;
             FolderDictionary[folder] = true;
             try
             {
@@ -226,7 +245,7 @@ namespace FileHistoryRecovery
             btnAddInput.Enabled = true;
             btnRemoveInput.Enabled = true;
             btnSelectOutput.Enabled = true;
-            MessageBox.Show(this, "Operation completed", this.Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(this, e.Cancelled ? "Operation cancelled" : "Operation completed", this.Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
             progressBar.Value = 0;
         }
 
